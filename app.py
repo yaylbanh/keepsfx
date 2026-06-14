@@ -89,50 +89,56 @@ def find_effects_wav(out_dir):
     return None, wavs
 
 
-def process(drive_file, upload_path, progress=gr.Progress()):
-    # Uu tien file upload; khong co thi lay file chon tu Drive
+def _process_impl(drive_file, upload_path, progress):
     video_path = upload_path or (os.path.join(INPUT_DIR, drive_file) if drive_file else None)
     if not video_path or not os.path.isfile(video_path):
-        raise gr.Error("Chua co video. Chon file tu Drive HOAC upload.")
+        raise RuntimeError("Chua co video. Chon file tu Drive HOAC upload.")
 
     work = tempfile.mkdtemp(prefix="keepsfx_")
+    progress(0.1, desc="Tach audio tu video...")
+    wav = os.path.join(work, "audio.wav")
+    extract_audio(video_path, wav)
+
+    progress(0.3, desc="BandIt dang tach speech/music/SFX (lau nhat)...")
+    sep_dir = os.path.join(work, "sep")
+    os.makedirs(sep_dir, exist_ok=True)
+    run_bandit(wav, sep_dir)
+
+    progress(0.8, desc="Lay stem SFX...")
+    sfx, all_wavs = find_effects_wav(sep_dir)
+    if not sfx:
+        raise RuntimeError(
+            "Khong tim thay stem SFX. Cac file tach duoc: "
+            + ", ".join(os.path.basename(w) for w in all_wavs)
+            + " -> gui ten file nay cho dev de chinh bo loc."
+        )
+
+    progress(0.9, desc="Ghep video + SFX...")
+    base = os.path.splitext(os.path.basename(video_path))[0]
+    out_dir = os.environ.get("KEEPSFX_OUTPUT", work)
+    os.makedirs(out_dir, exist_ok=True)
+    out_mp4 = os.path.join(out_dir, f"{base}_SFX.mp4")
+    out_sfx = os.path.join(out_dir, f"{base}_SFX.wav")
+    shutil.copyfile(sfx, out_sfx)
+    _ffmpeg([
+        "-i", video_path, "-i", out_sfx,
+        "-map", "0:v:0", "-map", "1:a:0",
+        "-c:v", "copy", "-c:a", "aac", "-b:a", "192k", "-shortest",
+        out_mp4,
+    ])
+    progress(1.0, desc="Xong!")
+    return out_mp4, out_sfx, f"✅ Xong!\nMP4: {out_mp4}\nSFX: {out_sfx}"
+
+
+def process(drive_file, upload_path, progress=gr.Progress()):
+    """Bao toan bo de LOI hien ra UI (Colab giau traceback)."""
+    import traceback
     try:
-        progress(0.1, desc="Tach audio tu video...")
-        wav = os.path.join(work, "audio.wav")
-        extract_audio(video_path, wav)
-
-        progress(0.3, desc="BandIt dang tach speech/music/SFX (lau nhat)...")
-        sep_dir = os.path.join(work, "sep")
-        os.makedirs(sep_dir, exist_ok=True)
-        run_bandit(wav, sep_dir)
-
-        progress(0.8, desc="Lay stem SFX...")
-        sfx, all_wavs = find_effects_wav(sep_dir)
-        if not sfx:
-            raise gr.Error(
-                "Khong tim thay stem SFX trong ket qua. Cac file tach duoc: "
-                + ", ".join(os.path.basename(w) for w in all_wavs)
-                + " -> bao lai ten file de chinh bo loc."
-            )
-
-        progress(0.9, desc="Ghep video + SFX...")
-        base = os.path.splitext(os.path.basename(video_path))[0]
-        out_dir = os.environ.get("KEEPSFX_OUTPUT", work)
-        os.makedirs(out_dir, exist_ok=True)
-        out_mp4 = os.path.join(out_dir, f"{base}_SFX.mp4")
-        out_sfx = os.path.join(out_dir, f"{base}_SFX.wav")
-        shutil.copyfile(sfx, out_sfx)
-        # Giu nguyen video (copy), thay audio = sfx
-        _ffmpeg([
-            "-i", video_path, "-i", out_sfx,
-            "-map", "0:v:0", "-map", "1:a:0",
-            "-c:v", "copy", "-c:a", "aac", "-b:a", "192k", "-shortest",
-            out_mp4,
-        ])
-        progress(1.0, desc="Xong!")
-        return out_mp4, out_sfx
-    finally:
-        pass  # giu work de debug neu can; co the don sau
+        return _process_impl(drive_file, upload_path, progress)
+    except Exception as exc:
+        tb = traceback.format_exc()
+        print(tb)  # cung in ra o Colab
+        return None, None, f"❌ LOI:\n{exc}\n\n--- chi tiet ---\n{tb[-3000:]}"
 
 
 with gr.Blocks(title="keepsfx - Giu lai SFX") as demo:
@@ -154,9 +160,10 @@ with gr.Blocks(title="keepsfx - Giu lai SFX") as demo:
         with gr.Column():
             vout = gr.File(label="📥 MP4 (audio = SFX)")
             aout = gr.File(label="📥 sfx.wav")
+            log = gr.Textbox(label="Log / Trang thai (loi hien o day)", lines=14)
     refresh_btn.click(fn=lambda: gr.update(choices=list_input_videos()), outputs=drive_dd)
-    btn.click(fn=process, inputs=[drive_dd, vin], outputs=[vout, aout])
+    btn.click(fn=process, inputs=[drive_dd, vin], outputs=[vout, aout, log])
 
 if __name__ == "__main__":
     share = os.environ.get("KEEPSFX_SHARE", "1") != "0"
-    demo.queue().launch(share=share, inbrowser=not share)
+    demo.queue().launch(share=share, inbrowser=not share, debug=True)
