@@ -9,6 +9,7 @@ Model BandIt: license CC BY-NC (phi thuong mai).
 """
 
 import os
+import re
 import glob
 import shutil
 import tempfile
@@ -75,49 +76,48 @@ def concat_wavs(wav_list, out_wav):
     _ffmpeg(["-f", "concat", "-safe", "0", "-i", list_file, "-c", "copy", out_wav])
 
 
-def run_bandit(wav_path, out_dir):
-    """Goi BandIt inference (subprocess) -> xuat cac stem vao out_dir."""
+def run_bandit_multi(file_glob, out_dir):
+    """Goi BandIt MOT LAN cho TAT CA chunk (inference_multiple) -> nap model 1 lan -> NHANH.
+    Tat residual + combinations -> chi xuat speech/music/effects (it file, lay dung 'effects')."""
     if not os.path.isfile(CKPT_PATH):
         raise gr.Error(f"Khong thay checkpoint: {CKPT_PATH}. Kiem tra buoc tai model trong notebook.")
-    # BandIt tim hparams.yaml o dirname(dirname(ckpt)) -> tuc thu muc CHA cua folder chua ckpt
     hparams = os.path.join(os.path.dirname(os.path.dirname(CKPT_PATH)), "hparams.yaml")
     if not os.path.isfile(hparams):
-        raise gr.Error(
-            f"Thieu hparams.yaml o {hparams} (BandIt tim o day). "
-            "Checkpoint phai nam trong subfolder, hparams.yaml o thu muc cha."
-        )
+        raise gr.Error(f"Thieu hparams.yaml o {hparams}. Checkpoint phai trong subfolder, hparams o thu muc cha.")
     cmd = [
-        "python", "inference.py", "inference",
+        "python", "inference.py", "inference_multiple",
         f"--ckpt_path={CKPT_PATH}",
-        f"--file_path={wav_path}",
+        f"--file_glob={file_glob}",
         "--model_name=keepsfx",
         f"--output_dir={out_dir}",
+        "--include_track_name=True",
+        "--get_residual=False",
+        "--get_no_vox_combinations=False",
     ]
-    print("[*] Chay BandIt:", " ".join(cmd))
-    # Config BandIt thay $PROJECT_ROOT bang os.environ['PROJECT_ROOT'] -> phai set
+    print("[*] Chay BandIt (multi, nap model 1 lan):", " ".join(cmd))
     env = os.environ.copy()
     env.setdefault("PROJECT_ROOT", BANDIT_DIR)
-    env.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")  # giam phan manh VRAM
+    env.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
     p = subprocess.run(cmd, cwd=BANDIT_DIR, capture_output=True, text=True, env=env)
-    print(p.stdout[-2000:])
+    print(p.stdout[-3000:])
     if p.returncode != 0:
-        raise RuntimeError(f"BandIt inference loi:\n{p.stderr[-2000:]}")
+        raise RuntimeError(f"BandIt inference loi:\n{p.stderr[-2500:]}")
 
 
-def find_effects_wav(out_dir):
-    """Tim file stem 'effects' (CHI hieu ung, KHONG lan music/speech/residual)."""
-    wavs = glob.glob(os.path.join(out_dir, "**", "*.wav"), recursive=True)
-    # 1) stem CHINH XAC = effects / sfx (uu tien tuyet doi, tranh 'effects+residual', 'music+effects')
-    for w in wavs:
+def find_effects_list(out_dir):
+    """Lay TAT CA file stem 'effects' theo dung thu tu chunk."""
+    eff = []
+    for w in glob.glob(os.path.join(out_dir, "**", "*.wav"), recursive=True):
         stem = os.path.splitext(os.path.basename(w))[0].lower()
         if stem in ("effects", "effect", "sfx"):
-            return w, wavs
-    # 2) fallback: chua 'effect', khong phai to hop (khong co dau +) va khong speech/music
-    for w in wavs:
-        n = os.path.basename(w).lower()
-        if "effect" in n and "+" not in n and "speech" not in n and "music" not in n:
-            return w, wavs
-    return None, wavs
+            eff.append(w)
+
+    def _key(p):
+        m = re.findall(r"chunk_(\d+)", p)
+        return int(m[-1]) if m else 0
+
+    eff.sort(key=_key)
+    return eff
 
 
 def _process_impl(drive_file, upload_path, progress):
@@ -130,26 +130,26 @@ def _process_impl(drive_file, upload_path, progress):
     wav = os.path.join(work, "audio.wav")
     extract_audio(video_path, wav)
 
-    # Chia nho de tranh OOM, chay BandIt tung doan
-    chunks = split_audio(wav, os.path.join(work, "chunks"))
+    # Chia nho de tranh OOM
+    chunks_dir = os.path.join(work, "chunks")
+    chunks = split_audio(wav, chunks_dir)
     if not chunks:
-        chunks = [wav]
+        chunks_dir = work
     print(f"[*] Chia {len(chunks)} doan x {CHUNK_SEC}s")
-    sfx_parts = []
-    for i, ck in enumerate(chunks):
-        progress(0.1 + 0.7 * i / len(chunks),
-                 desc=f"BandIt tach SFX doan {i+1}/{len(chunks)} (lau nhat)...")
-        sep_dir = os.path.join(work, f"sep_{i:04d}")
-        os.makedirs(sep_dir, exist_ok=True)
-        run_bandit(ck, sep_dir)
-        part, all_wavs = find_effects_wav(sep_dir)
-        if not part:
-            raise RuntimeError(
-                "Khong tim thay stem SFX. Cac file tach duoc: "
-                + ", ".join(os.path.basename(w) for w in all_wavs)
-                + " -> gui ten file nay cho dev de chinh bo loc."
-            )
-        sfx_parts.append(part)
+
+    # Chay BandIt MOT LAN cho tat ca chunk (nap model 1 lan -> nhanh hon nhieu)
+    progress(0.15, desc=f"BandIt tach SFX {len(chunks)} doan (nap model 1 lan)...")
+    sep_dir = os.path.join(work, "sep")
+    run_bandit_multi(os.path.join(chunks_dir, "chunk_*.wav"), sep_dir)
+
+    sfx_parts = find_effects_list(sep_dir)
+    if not sfx_parts:
+        all_wavs = glob.glob(os.path.join(sep_dir, "**", "*.wav"), recursive=True)
+        raise RuntimeError(
+            "Khong tim thay stem 'effects'. Cac file tach duoc: "
+            + ", ".join(os.path.basename(w) for w in all_wavs[:30])
+            + " -> gui cho dev de chinh bo loc."
+        )
 
     progress(0.85, desc="Ghep cac doan SFX + video...")
     sfx_full = os.path.join(work, "sfx_full.wav")
