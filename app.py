@@ -11,6 +11,7 @@ Model BandIt: license CC BY-NC (phi thuong mai).
 import os
 import re
 import glob
+import time
 import shutil
 import tempfile
 import subprocess
@@ -76,7 +77,7 @@ def concat_wavs(wav_list, out_wav):
     _ffmpeg(["-f", "concat", "-safe", "0", "-i", list_file, "-c", "copy", out_wav])
 
 
-def run_bandit_multi(file_glob, out_dir):
+def run_bandit_multi(file_glob, out_dir, progress=None, total=0):
     """Goi BandIt MOT LAN cho TAT CA chunk (inference_multiple) -> nap model 1 lan -> NHANH.
     Tat residual + combinations -> chi xuat speech/music/effects (it file, lay dung 'effects')."""
     if not os.path.isfile(CKPT_PATH):
@@ -98,10 +99,30 @@ def run_bandit_multi(file_glob, out_dir):
     env = os.environ.copy()
     env.setdefault("PROJECT_ROOT", BANDIT_DIR)
     env.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
-    p = subprocess.run(cmd, cwd=BANDIT_DIR, capture_output=True, text=True, env=env)
-    print(p.stdout[-3000:])
-    if p.returncode != 0:
-        raise RuntimeError(f"BandIt inference loi:\n{p.stderr[-2500:]}")
+
+    def _done_count():
+        n = 0
+        for w in glob.glob(os.path.join(out_dir, "**", "*.wav"), recursive=True):
+            if os.path.splitext(os.path.basename(w))[0].lower() in ("effects", "effect", "sfx"):
+                n += 1
+        return n
+
+    # Popen + dem so doan da xong -> thanh tien do CHAY THAT
+    proc = subprocess.Popen(cmd, cwd=BANDIT_DIR, stdout=subprocess.PIPE,
+                            stderr=subprocess.STDOUT, text=True, env=env)
+    t0 = time.time()
+    while proc.poll() is None:
+        done = _done_count()
+        if progress and total:
+            el = time.time() - t0
+            eta = (el / done * (total - done)) if done else 0
+            progress(min(0.78, 0.1 + 0.68 * done / total),
+                     desc=f"BandIt tach SFX: {done}/{total} doan | da {int(el)}s, con ~{int(eta)}s")
+        time.sleep(2)
+    out = proc.stdout.read() if proc.stdout else ""
+    print(out[-3000:])
+    if proc.returncode != 0:
+        raise RuntimeError(f"BandIt inference loi:\n{out[-2500:]}")
 
 
 def find_effects_list(out_dir):
@@ -137,7 +158,7 @@ def _process_impl(drive_file, upload_path, progress):
     # Chay BandIt MOT LAN cho tat ca chunk (nap model 1 lan -> nhanh hon nhieu)
     progress(0.1, desc=f"BandIt tach SFX {len(chunks)} doan (nap model 1 lan)...")
     sep_dir = os.path.join(work, "sep")
-    run_bandit_multi(os.path.join(chunks_dir, "chunk_*.wav"), sep_dir)
+    run_bandit_multi(os.path.join(chunks_dir, "chunk_*.wav"), sep_dir, progress, len(chunks))
 
     sfx_parts = find_effects_list(sep_dir)
     if not sfx_parts:
