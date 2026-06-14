@@ -19,7 +19,7 @@ import gradio as gr
 
 # ====== CAU HINH (chinh qua bien moi truong trong notebook/bat) ======
 BANDIT_DIR = os.environ.get("BANDIT_DIR", "/content/bandit")
-CKPT_PATH = os.environ.get("BANDIT_CKPT", "/content/drive/MyDrive/keepsfx_models/ckpt/dnr-3s-bark48-l1snr.ckpt")
+CKPT_PATH = os.environ.get("BANDIT_CKPT", "/content/drive/MyDrive/keepsfx_models/ckpt/dnr-3s-bark64-l1snr.ckpt")
 INPUT_DIR = os.environ.get("KEEPSFX_INPUT", "/content/drive/MyDrive/keepsfx_input")
 FS = 44100  # BandIt yeu cau 44.1kHz
 VIDEO_EXTS = (".mp4", ".mkv", ".mov", ".avi", ".webm", ".m4v", ".ts")
