@@ -55,15 +55,15 @@ def extract_audio(video_path, out_wav):
 
 
 # Chia nho audio de BandIt khong bi het VRAM (xu ly ca file 1 luc -> OOM)
-CHUNK_SEC = int(os.environ.get("KEEPSFX_CHUNK_SEC", "30"))
+CHUNK_SEC = int(os.environ.get("KEEPSFX_CHUNK_SEC", "60"))
 
 
-def split_audio(wav_path, out_dir):
-    """Cat wav thanh cac doan CHUNK_SEC giay -> tra ve list duong dan theo thu tu."""
+def split_video_to_chunks(video_path, out_dir):
+    """Trich audio + chia doan CHUNK_SEC giay TRONG 1 BUOC tu video (khoi tao wav 10GB trung gian)."""
     os.makedirs(out_dir, exist_ok=True)
     pattern = os.path.join(out_dir, "chunk_%04d.wav")
-    _ffmpeg(["-i", wav_path, "-f", "segment", "-segment_time", str(CHUNK_SEC),
-             "-ac", "2", "-ar", str(FS), pattern])
+    _ffmpeg(["-i", video_path, "-vn", "-ac", "2", "-ar", str(FS),
+             "-f", "segment", "-segment_time", str(CHUNK_SEC), pattern])
     return sorted(glob.glob(os.path.join(out_dir, "chunk_*.wav")))
 
 
@@ -126,19 +126,16 @@ def _process_impl(drive_file, upload_path, progress):
         raise RuntimeError("Chua co video. Chon file tu Drive HOAC upload.")
 
     work = tempfile.mkdtemp(prefix="keepsfx_")
-    progress(0.05, desc="Tach audio tu video...")
-    wav = os.path.join(work, "audio.wav")
-    extract_audio(video_path, wav)
-
-    # Chia nho de tranh OOM
+    progress(0.05, desc="Trich + chia audio tu video...")
+    # Trich + chia thang tu video (1 buoc, khoi wav 10GB trung gian -> tiet kiem disk cho video 4h)
     chunks_dir = os.path.join(work, "chunks")
-    chunks = split_audio(wav, chunks_dir)
+    chunks = split_video_to_chunks(video_path, chunks_dir)
     if not chunks:
-        chunks_dir = work
+        raise RuntimeError("Khong trich duoc audio tu video.")
     print(f"[*] Chia {len(chunks)} doan x {CHUNK_SEC}s")
 
     # Chay BandIt MOT LAN cho tat ca chunk (nap model 1 lan -> nhanh hon nhieu)
-    progress(0.15, desc=f"BandIt tach SFX {len(chunks)} doan (nap model 1 lan)...")
+    progress(0.1, desc=f"BandIt tach SFX {len(chunks)} doan (nap model 1 lan)...")
     sep_dir = os.path.join(work, "sep")
     run_bandit_multi(os.path.join(chunks_dir, "chunk_*.wav"), sep_dir)
 
@@ -150,6 +147,16 @@ def _process_impl(drive_file, upload_path, progress):
             + ", ".join(os.path.basename(w) for w in all_wavs[:30])
             + " -> gui cho dev de chinh bo loc."
         )
+
+    # DON DISK: xoa stem speech/music + chunk input (giu effects) -> quan trong cho video 4h
+    progress(0.8, desc="Don disk + ghep SFX...")
+    for w in glob.glob(os.path.join(sep_dir, "**", "*.wav"), recursive=True):
+        if os.path.splitext(os.path.basename(w))[0].lower() not in ("effects", "effect", "sfx"):
+            try:
+                os.remove(w)
+            except Exception:
+                pass
+    shutil.rmtree(chunks_dir, ignore_errors=True)
 
     progress(0.85, desc="Ghep cac doan SFX + video...")
     sfx_full = os.path.join(work, "sfx_full.wav")
@@ -170,6 +177,9 @@ def _process_impl(drive_file, upload_path, progress):
         "-c:v", "copy", "-c:a", "aac", "-b:a", "192k", "-shortest",
         out_mp4,
     ])
+    # Don sach temp (output da o Drive) -> giai phong disk cho video dai / lan chay sau
+    if out_dir != work:
+        shutil.rmtree(work, ignore_errors=True)
     progress(1.0, desc="Xong!")
     return out_mp4, out_sfx, f"✅ Xong!\nMP4: {out_mp4}\nSFX: {out_sfx}"
 
