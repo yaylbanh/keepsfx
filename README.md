@@ -19,8 +19,9 @@ Dùng **BandIt** — model SOTA tách 3 luồng *speech / music / effects* (Cine
 2. `Runtime → Change runtime type → GPU T4 → Save`.
 3. Bấm ▶ chạy ô code → **Accept** Google Drive.
 4. Lần đầu tải model ~775MB vào `MyDrive/keepsfx_models/` (lần sau khỏi tải).
-5. Mở link `*.gradio.live` → upload video → **Tách & giữ SFX**.
-6. Tải MP4 (audio = SFX) — cũng lưu ở `MyDrive/keepsfx_output/`.
+5. Mở link `*.gradio.live`.
+6. **Video lớn:** bỏ MP4 vào `MyDrive/keepsfx_input/` → bấm **Làm mới** → chọn file (khỏi upload web, tránh đứt). **Video nhỏ:** upload thẳng trên web.
+7. Bấm **Tách & giữ SFX** → tải MP4 (audio = SFX), cũng lưu ở `MyDrive/keepsfx_output/`.
 
 ---
 

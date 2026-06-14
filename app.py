@@ -19,10 +19,26 @@ import gradio as gr
 # ====== CAU HINH (chinh qua bien moi truong trong notebook/bat) ======
 BANDIT_DIR = os.environ.get("BANDIT_DIR", "/content/bandit")
 CKPT_PATH = os.environ.get("BANDIT_CKPT", "/content/drive/MyDrive/keepsfx_models/dnr-3s-bark48-l1snr.ckpt")
+INPUT_DIR = os.environ.get("KEEPSFX_INPUT", "/content/drive/MyDrive/keepsfx_input")
 FS = 44100  # BandIt yeu cau 44.1kHz
+VIDEO_EXTS = (".mp4", ".mkv", ".mov", ".avi", ".webm", ".m4v", ".ts")
 
 print(f"[*] BANDIT_DIR = {BANDIT_DIR}")
 print(f"[*] CKPT_PATH  = {CKPT_PATH} (ton tai: {os.path.isfile(CKPT_PATH)})")
+
+# Thu muc Drive de bo video lon vao (khoi upload qua web)
+if os.path.isdir(os.path.dirname(INPUT_DIR)):
+    os.makedirs(INPUT_DIR, exist_ok=True)
+    print(f"[*] Bo video vao: {INPUT_DIR}")
+
+
+def list_input_videos():
+    if not os.path.isdir(INPUT_DIR):
+        return []
+    try:
+        return sorted(f for f in os.listdir(INPUT_DIR) if f.lower().endswith(VIDEO_EXTS))
+    except Exception:
+        return []
 
 
 def _ffmpeg(args):
@@ -73,9 +89,11 @@ def find_effects_wav(out_dir):
     return None, wavs
 
 
-def process(video_path, progress=gr.Progress()):
+def process(drive_file, upload_path, progress=gr.Progress()):
+    # Uu tien file upload; khong co thi lay file chon tu Drive
+    video_path = upload_path or (os.path.join(INPUT_DIR, drive_file) if drive_file else None)
     if not video_path or not os.path.isfile(video_path):
-        raise gr.Error("Chua chon video.")
+        raise gr.Error("Chua co video. Chon file tu Drive HOAC upload.")
 
     work = tempfile.mkdtemp(prefix="keepsfx_")
     try:
@@ -126,12 +144,18 @@ with gr.Blocks(title="keepsfx - Giu lai SFX") as demo:
     )
     with gr.Row():
         with gr.Column():
-            vin = gr.Video(label="Video dau vao (MP4...)")
+            drive_dd = gr.Dropdown(
+                choices=list_input_videos(), value=None,
+                label="📁 Chon video tu Drive (MyDrive/keepsfx_input) - NEN dung cho file lon",
+            )
+            refresh_btn = gr.Button("🔄 Lam moi danh sach Drive", size="sm")
+            vin = gr.Video(label="… hoac Upload truc tiep (file nho)")
             btn = gr.Button("▶ Tach & giu SFX", variant="primary")
         with gr.Column():
             vout = gr.File(label="📥 MP4 (audio = SFX)")
             aout = gr.File(label="📥 sfx.wav")
-    btn.click(fn=process, inputs=[vin], outputs=[vout, aout])
+    refresh_btn.click(fn=lambda: gr.update(choices=list_input_videos()), outputs=drive_dd)
+    btn.click(fn=process, inputs=[drive_dd, vin], outputs=[vout, aout])
 
 if __name__ == "__main__":
     share = os.environ.get("KEEPSFX_SHARE", "1") != "0"
