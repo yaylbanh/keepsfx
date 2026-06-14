@@ -18,7 +18,7 @@ import gradio as gr
 
 # ====== CAU HINH (chinh qua bien moi truong trong notebook/bat) ======
 BANDIT_DIR = os.environ.get("BANDIT_DIR", "/content/bandit")
-CKPT_PATH = os.environ.get("BANDIT_CKPT", "/content/drive/MyDrive/keepsfx_models/dnr-3s-bark48-l1snr.ckpt")
+CKPT_PATH = os.environ.get("BANDIT_CKPT", "/content/drive/MyDrive/keepsfx_models/ckpt/dnr-3s-bark48-l1snr.ckpt")
 INPUT_DIR = os.environ.get("KEEPSFX_INPUT", "/content/drive/MyDrive/keepsfx_input")
 FS = 44100  # BandIt yeu cau 44.1kHz
 VIDEO_EXTS = (".mp4", ".mkv", ".mov", ".avi", ".webm", ".m4v", ".ts")
@@ -57,9 +57,13 @@ def run_bandit(wav_path, out_dir):
     """Goi BandIt inference (subprocess) -> xuat cac stem vao out_dir."""
     if not os.path.isfile(CKPT_PATH):
         raise gr.Error(f"Khong thay checkpoint: {CKPT_PATH}. Kiem tra buoc tai model trong notebook.")
-    hparams = os.path.join(os.path.dirname(CKPT_PATH), "hparams.yaml")
+    # BandIt tim hparams.yaml o dirname(dirname(ckpt)) -> tuc thu muc CHA cua folder chua ckpt
+    hparams = os.path.join(os.path.dirname(os.path.dirname(CKPT_PATH)), "hparams.yaml")
     if not os.path.isfile(hparams):
-        raise gr.Error(f"Thieu hparams.yaml canh checkpoint ({hparams}). Notebook phai copy config vao day.")
+        raise gr.Error(
+            f"Thieu hparams.yaml o {hparams} (BandIt tim o day). "
+            "Checkpoint phai nam trong subfolder, hparams.yaml o thu muc cha."
+        )
     cmd = [
         "python", "inference.py", "inference",
         f"--ckpt_path={CKPT_PATH}",
