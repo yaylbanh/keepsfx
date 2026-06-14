@@ -53,6 +53,28 @@ def extract_audio(video_path, out_wav):
     _ffmpeg(["-i", video_path, "-vn", "-ac", "2", "-ar", str(FS), out_wav])
 
 
+# Chia nho audio de BandIt khong bi het VRAM (xu ly ca file 1 luc -> OOM)
+CHUNK_SEC = int(os.environ.get("KEEPSFX_CHUNK_SEC", "30"))
+
+
+def split_audio(wav_path, out_dir):
+    """Cat wav thanh cac doan CHUNK_SEC giay -> tra ve list duong dan theo thu tu."""
+    os.makedirs(out_dir, exist_ok=True)
+    pattern = os.path.join(out_dir, "chunk_%04d.wav")
+    _ffmpeg(["-i", wav_path, "-f", "segment", "-segment_time", str(CHUNK_SEC),
+             "-ac", "2", "-ar", str(FS), pattern])
+    return sorted(glob.glob(os.path.join(out_dir, "chunk_*.wav")))
+
+
+def concat_wavs(wav_list, out_wav):
+    """Noi cac wav (cung dinh dang) lai theo thu tu."""
+    list_file = out_wav + ".txt"
+    with open(list_file, "w", encoding="utf-8") as f:
+        for w in wav_list:
+            f.write(f"file '{w}'\n")
+    _ffmpeg(["-f", "concat", "-safe", "0", "-i", list_file, "-c", "copy", out_wav])
+
+
 def run_bandit(wav_path, out_dir):
     """Goi BandIt inference (subprocess) -> xuat cac stem vao out_dir."""
     if not os.path.isfile(CKPT_PATH):
@@ -75,6 +97,7 @@ def run_bandit(wav_path, out_dir):
     # Config BandIt thay $PROJECT_ROOT bang os.environ['PROJECT_ROOT'] -> phai set
     env = os.environ.copy()
     env.setdefault("PROJECT_ROOT", BANDIT_DIR)
+    env.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")  # giam phan manh VRAM
     p = subprocess.run(cmd, cwd=BANDIT_DIR, capture_output=True, text=True, env=env)
     print(p.stdout[-2000:])
     if p.returncode != 0:
@@ -102,25 +125,38 @@ def _process_impl(drive_file, upload_path, progress):
         raise RuntimeError("Chua co video. Chon file tu Drive HOAC upload.")
 
     work = tempfile.mkdtemp(prefix="keepsfx_")
-    progress(0.1, desc="Tach audio tu video...")
+    progress(0.05, desc="Tach audio tu video...")
     wav = os.path.join(work, "audio.wav")
     extract_audio(video_path, wav)
 
-    progress(0.3, desc="BandIt dang tach speech/music/SFX (lau nhat)...")
-    sep_dir = os.path.join(work, "sep")
-    os.makedirs(sep_dir, exist_ok=True)
-    run_bandit(wav, sep_dir)
+    # Chia nho de tranh OOM, chay BandIt tung doan
+    chunks = split_audio(wav, os.path.join(work, "chunks"))
+    if not chunks:
+        chunks = [wav]
+    print(f"[*] Chia {len(chunks)} doan x {CHUNK_SEC}s")
+    sfx_parts = []
+    for i, ck in enumerate(chunks):
+        progress(0.1 + 0.7 * i / len(chunks),
+                 desc=f"BandIt tach SFX doan {i+1}/{len(chunks)} (lau nhat)...")
+        sep_dir = os.path.join(work, f"sep_{i:04d}")
+        os.makedirs(sep_dir, exist_ok=True)
+        run_bandit(ck, sep_dir)
+        part, all_wavs = find_effects_wav(sep_dir)
+        if not part:
+            raise RuntimeError(
+                "Khong tim thay stem SFX. Cac file tach duoc: "
+                + ", ".join(os.path.basename(w) for w in all_wavs)
+                + " -> gui ten file nay cho dev de chinh bo loc."
+            )
+        sfx_parts.append(part)
 
-    progress(0.8, desc="Lay stem SFX...")
-    sfx, all_wavs = find_effects_wav(sep_dir)
-    if not sfx:
-        raise RuntimeError(
-            "Khong tim thay stem SFX. Cac file tach duoc: "
-            + ", ".join(os.path.basename(w) for w in all_wavs)
-            + " -> gui ten file nay cho dev de chinh bo loc."
-        )
-
-    progress(0.9, desc="Ghep video + SFX...")
+    progress(0.85, desc="Ghep cac doan SFX + video...")
+    sfx_full = os.path.join(work, "sfx_full.wav")
+    if len(sfx_parts) == 1:
+        sfx_full = sfx_parts[0]
+    else:
+        concat_wavs(sfx_parts, sfx_full)
+    sfx = sfx_full
     base = os.path.splitext(os.path.basename(video_path))[0]
     out_dir = os.environ.get("KEEPSFX_OUTPUT", work)
     os.makedirs(out_dir, exist_ok=True)
