@@ -105,16 +105,17 @@ def run_bandit(wav_path, out_dir):
 
 
 def find_effects_wav(out_dir):
-    """Tim file stem 'effects/sfx' trong ket qua tach."""
+    """Tim file stem 'effects' (CHI hieu ung, KHONG lan music/speech/residual)."""
     wavs = glob.glob(os.path.join(out_dir, "**", "*.wav"), recursive=True)
-    # Uu tien ten chua effect/sfx/fx, tranh nham speech/music
+    # 1) stem CHINH XAC = effects / sfx (uu tien tuyet doi, tranh 'effects+residual', 'music+effects')
     for w in wavs:
-        n = os.path.basename(w).lower()
-        if any(k in n for k in ("effect", "sfx")) and "speech" not in n and "music" not in n:
+        stem = os.path.splitext(os.path.basename(w))[0].lower()
+        if stem in ("effects", "effect", "sfx"):
             return w, wavs
+    # 2) fallback: chua 'effect', khong phai to hop (khong co dau +) va khong speech/music
     for w in wavs:
         n = os.path.basename(w).lower()
-        if n.startswith("fx") or "_fx" in n:
+        if "effect" in n and "+" not in n and "speech" not in n and "music" not in n:
             return w, wavs
     return None, wavs
 
@@ -209,4 +210,6 @@ with gr.Blocks(title="keepsfx - Giu lai SFX") as demo:
 
 if __name__ == "__main__":
     share = os.environ.get("KEEPSFX_SHARE", "1") != "0"
-    demo.queue().launch(share=share, inbrowser=not share, debug=True)
+    # Cho phep Gradio phuc vu file output nam tren Drive (mac dinh chi cho cwd/temp)
+    allowed = [p for p in [os.environ.get("KEEPSFX_OUTPUT", ""), "/content/drive/MyDrive"] if p]
+    demo.queue().launch(share=share, inbrowser=not share, debug=True, allowed_paths=allowed)
