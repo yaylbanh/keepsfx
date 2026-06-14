@@ -72,7 +72,10 @@ def run_bandit(wav_path, out_dir):
         f"--output_dir={out_dir}",
     ]
     print("[*] Chay BandIt:", " ".join(cmd))
-    p = subprocess.run(cmd, cwd=BANDIT_DIR, capture_output=True, text=True)
+    # Config BandIt thay $PROJECT_ROOT bang os.environ['PROJECT_ROOT'] -> phai set
+    env = os.environ.copy()
+    env.setdefault("PROJECT_ROOT", BANDIT_DIR)
+    p = subprocess.run(cmd, cwd=BANDIT_DIR, capture_output=True, text=True, env=env)
     print(p.stdout[-2000:])
     if p.returncode != 0:
         raise RuntimeError(f"BandIt inference loi:\n{p.stderr[-2000:]}")
