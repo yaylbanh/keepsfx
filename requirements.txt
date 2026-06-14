@@ -1,0 +1,17 @@
+# Giao dien
+gradio>=4.44.0
+soundfile
+
+# --- Phu thuoc cua BandIt (cinematic audio separation) ---
+# LUU Y: tren Colab (Python 3.12) KHONG cai lai torch/torchaudio (dung ban san co cua Colab),
+# vi torch 2.0.0 khong co wheel cho 3.12. Chi cai cac goi con lai.
+lightning
+torchmetrics
+fire
+librosa
+spafe
+openunmix
+pedalboard
+torch-audiomentations
+pandas
+asteroid

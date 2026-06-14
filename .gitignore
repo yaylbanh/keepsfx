@@ -1,0 +1,9 @@
+__pycache__/
+*.pyc
+models/
+*.ckpt
+*.wav
+*.mp4
+*.mkv
+bandit/
+.ipynb_checkpoints/
