@@ -273,9 +273,9 @@ def run_bandit_multi(file_glob, out_dir, ckpt_path, total=0, backup_dir=None, lo
                 time_per_chunk = el_since / (done - 1)
                 rtf = time_per_chunk / CHUNK_SEC
                 eta = (total - done) * time_per_chunk
-                _log(f"[BandIt] {done}/{total} doan xong | RTF {rtf:.2f}x | ETA ~{_fmt(eta)}")
+                _log(f"[BandIt] {done}/{total} doan xong | RTF {rtf:.2f}x | ETA ~{_fmt(eta)} | da chay {_fmt(el)}")
             else:
-                _log(f"[BandIt] {done}/{total} doan xong | dang do RTF...")
+                _log(f"[BandIt] {done}/{total} doan xong | dang do RTF... | da chay {_fmt(el)}")
             prev_done = done
         time.sleep(2)
 
@@ -315,6 +315,7 @@ def _process_impl(drive_file, upload_path, log_fn, model_stem=None):
     if not raw_path or not os.path.isfile(raw_path):
         raise RuntimeError("Chua co file. Chon tu Drive HOAC upload.")
 
+    t_start = time.time()
     stem = model_stem or DEFAULT_MODEL
     ckpt_path, _ = _ensure_model(stem, log_fn=_log)
 
@@ -413,9 +414,16 @@ def _process_impl(drive_file, upload_path, log_fn, model_stem=None):
         out_sfx = os.path.join(out_dir, f"{base}_SFX.wav")
         shutil.copyfile(sfx_full, out_sfx)
 
+        def _fmt_local(sec):
+            sec = int(sec)
+            if sec >= 3600:
+                return f"{sec//3600}h{(sec%3600)//60}p{sec%60:02d}s"
+            return f"{sec//60}p{sec%60:02d}s"
+
         if is_audio:
             _success = True
-            _log(f"✅ Xong! SFX: {out_sfx}")
+            total_time = _fmt_local(time.time() - t_start)
+            _log(f"✅ Xong! Tong thoi gian: {total_time}\nSFX: {out_sfx}")
             return None, out_sfx
 
         out_mp4 = os.path.join(out_dir, f"{base}_SFX.mp4")
@@ -426,7 +434,8 @@ def _process_impl(drive_file, upload_path, log_fn, model_stem=None):
             out_mp4,
         ])
         _success = True
-        _log(f"✅ Xong!\nMP4: {out_mp4}\nSFX: {out_sfx}")
+        total_time = _fmt_local(time.time() - t_start)
+        _log(f"✅ Xong! Tong thoi gian: {total_time}\nMP4: {out_mp4}\nSFX: {out_sfx}")
         return out_mp4, out_sfx
 
     finally:
