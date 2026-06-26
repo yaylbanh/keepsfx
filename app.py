@@ -24,6 +24,7 @@ import gradio as gr
 # ====== CAU HINH ======
 BANDIT_DIR   = os.environ.get("BANDIT_DIR",   "/content/bandit")
 CKPT_PATH    = os.environ.get("BANDIT_CKPT",  "/content/drive/MyDrive/keepsfx_models/ckpt/dnr-3s-bark48-l1snr.ckpt")
+MODELS_DIR   = os.environ.get("KEEPSFX_MODELS_DIR", os.path.dirname(os.path.dirname(CKPT_PATH)))
 INPUT_DIR    = os.environ.get("KEEPSFX_INPUT",    "/content/drive/MyDrive/keepsfx_input")
 PROGRESS_DIR = os.environ.get("KEEPSFX_PROGRESS", "/content/drive/MyDrive/keepsfx_progress")
 
@@ -32,8 +33,19 @@ CHUNK_SEC  = int(os.environ.get("KEEPSFX_CHUNK_SEC", "60"))  # 60s: an toan voi 
 VIDEO_EXTS = (".mp4", ".mkv", ".mov", ".avi", ".webm", ".m4v", ".ts")
 AUDIO_EXTS = (".wav", ".mp3", ".flac", ".m4a", ".aac", ".ogg", ".opus")
 
+KNOWN_MODELS = {
+    "dnr-3s-erb48-l1snr":  "🚀 Nhanh nhất — erb48 (~2× nhanh hơn bark48, RTF ≈ 0.9×, T4: 1h → ~55p)",
+    "dnr-3s-mus64-l1snr":  "⚡ Nhanh — mus64 (~1.5× nhanh hơn bark48, RTF ≈ 1.2×, T4: 1h → ~1h15p)",
+    "dnr-3s-bark48-l1snr": "⚖️ Cân bằng — bark48 (RTF ≈ 1.7×, T4: 1h → ~1h45p)  ← mặc định",
+    "dnr-3s-bark64-l1snr": "🎯 Chất lượng — bark64 (RTF ~4×+, T4: rất chậm, không khuyến dùng)",
+}
+_default_stem = os.path.splitext(os.path.basename(CKPT_PATH))[0]
+DEFAULT_MODEL = _default_stem if _default_stem in KNOWN_MODELS else "dnr-3s-bark48-l1snr"
+
 print(f"[*] BANDIT_DIR   = {BANDIT_DIR}")
+print(f"[*] MODELS_DIR   = {MODELS_DIR}")
 print(f"[*] CKPT_PATH    = {CKPT_PATH} (ton tai: {os.path.isfile(CKPT_PATH)})")
+print(f"[*] DEFAULT_MODEL = {DEFAULT_MODEL}")
 print(f"[*] PROGRESS_DIR = {PROGRESS_DIR}")
 print(f"[*] CHUNK_SEC    = {CHUNK_SEC}s")
 
@@ -130,23 +142,74 @@ def _backup_new_effects(sep_dir, progress_dir, already_backed, log_fn=None):
     return new_backed
 
 
-# ====== BANDIT INFERENCE ======
+# ====== MODEL MANAGEMENT ======
 
-def run_bandit_multi(file_glob, out_dir, total=0, backup_dir=None, log_fn=None):
+def _ensure_model(stem, log_fn=None):
+    """Dam bao checkpoint va hparams.yaml cho model stem ton tai. Tra ve (ckpt_path, hparams_dst)."""
+    import urllib.request
+
     def _log(msg):
         print(msg, flush=True)
         if log_fn:
             log_fn(msg)
 
-    if not os.path.isfile(CKPT_PATH):
-        raise gr.Error(f"Khong thay checkpoint: {CKPT_PATH}")
-    hparams = os.path.join(os.path.dirname(os.path.dirname(CKPT_PATH)), "hparams.yaml")
+    if not os.path.isdir(MODELS_DIR):
+        raise RuntimeError(
+            f"Thu muc model chua ton tai: {MODELS_DIR}\n"
+            "Hay chay notebook de mount Drive va tao thu muc truoc."
+        )
+
+    ckpt_dir    = os.path.join(MODELS_DIR, "ckpt")
+    ckpt_path   = os.path.join(ckpt_dir, f"{stem}.ckpt")
+    hparams_src = os.path.join(BANDIT_DIR, "expt", f"{stem}.yaml")
+    hparams_dst = os.path.join(MODELS_DIR, "hparams.yaml")
+
+    os.makedirs(ckpt_dir, exist_ok=True)
+
+    if not os.path.isfile(ckpt_path):
+        url = f"https://zenodo.org/records/10160698/files/{stem}.ckpt?download=1"
+        _log(f"[model] Chua co {stem}.ckpt → tai ve (~775MB, luu Drive de lan sau khoi tai lai)...")
+        pct_logged = [0]
+
+        def _progress(count, block_size, total_size):
+            if total_size > 0:
+                pct = min(int(count * block_size / total_size * 100), 100)
+                if pct >= pct_logged[0] + 10:
+                    pct_logged[0] = (pct // 10) * 10
+                    _log(f"[model] Download {stem}: {pct}%")
+
+        urllib.request.urlretrieve(url, ckpt_path, reporthook=_progress)
+        _log(f"[model] Tai xong: {os.path.getsize(ckpt_path) // (1024 * 1024)}MB → {ckpt_path}")
+    else:
+        _log(f"[model] Dung model: {stem}")
+
+    if os.path.isfile(hparams_src):
+        shutil.copyfile(hparams_src, hparams_dst)
+    elif not os.path.isfile(hparams_dst):
+        raise RuntimeError(
+            f"Thieu hparams.yaml: {hparams_dst}\nVa khong tim thay {hparams_src}. Hay chay notebook truoc."
+        )
+
+    return ckpt_path, hparams_dst
+
+
+# ====== BANDIT INFERENCE ======
+
+def run_bandit_multi(file_glob, out_dir, ckpt_path, total=0, backup_dir=None, log_fn=None):
+    def _log(msg):
+        print(msg, flush=True)
+        if log_fn:
+            log_fn(msg)
+
+    if not os.path.isfile(ckpt_path):
+        raise gr.Error(f"Khong thay checkpoint: {ckpt_path}")
+    hparams = os.path.join(MODELS_DIR, "hparams.yaml")
     if not os.path.isfile(hparams):
         raise gr.Error(f"Thieu hparams.yaml o {hparams}")
 
     cmd = [
         "python", "inference.py", "inference_multiple",
-        f"--ckpt_path={CKPT_PATH}",
+        f"--ckpt_path={ckpt_path}",
         f"--file_glob={file_glob}",
         "--model_name=keepsfx",
         f"--output_dir={out_dir}",
@@ -243,7 +306,7 @@ def find_effects_list(out_dir):
 
 # ====== XU LY CHINH ======
 
-def _process_impl(drive_file, upload_path, log_fn):
+def _process_impl(drive_file, upload_path, log_fn, model_stem=None):
     def _log(msg):
         print(msg, flush=True)
         log_fn(msg)
@@ -251,6 +314,9 @@ def _process_impl(drive_file, upload_path, log_fn):
     raw_path = upload_path or (os.path.join(INPUT_DIR, drive_file) if drive_file else None)
     if not raw_path or not os.path.isfile(raw_path):
         raise RuntimeError("Chua co file. Chon tu Drive HOAC upload.")
+
+    stem = model_stem or DEFAULT_MODEL
+    ckpt_path, _ = _ensure_model(stem, log_fn=_log)
 
     is_audio     = raw_path.lower().endswith(AUDIO_EXTS)
     job_id       = _job_id(raw_path)
@@ -287,6 +353,7 @@ def _process_impl(drive_file, upload_path, log_fn):
             sep_dir = os.path.join(work, "sep")
             run_bandit_multi(
                 os.path.join(todo_dir, "chunk_*.wav"), sep_dir,
+                ckpt_path,
                 len(todo_idx),
                 backup_dir=progress_dir,
                 log_fn=log_fn,
@@ -370,7 +437,7 @@ def _process_impl(drive_file, upload_path, log_fn):
             print(f"[cleanup] Xoa progress dir: {progress_dir}", flush=True)
 
 
-def process(drive_file, upload_path):
+def process(drive_file, upload_path, model_stem=None):
     """Generator: cap nhat log textbox moi 2 giay trong khi BandIt chay."""
     log_lines  = []
     final      = [None]
@@ -383,7 +450,7 @@ def process(drive_file, upload_path):
     def _bg():
         import traceback as _tb
         try:
-            final[0] = _process_impl(drive_file, upload_path, _log)
+            final[0] = _process_impl(drive_file, upload_path, _log, model_stem)
         except Exception as exc:
             tb = _tb.format_exc()
             print(tb)
@@ -431,13 +498,22 @@ with gr.Blocks(title="keepsfx - Giu lai SFX") as demo:
                     ".wav", ".mp3", ".flac", ".m4a", ".aac", ".ogg", ".opus",
                 ],
             )
+            model_radio = gr.Radio(
+                choices=[(label, stem) for stem, label in KNOWN_MODELS.items()],
+                value=DEFAULT_MODEL,
+                label="⚙️ Chon model (chat luong / toc do)",
+            )
+            gr.Markdown(
+                "_Model chua co tren Drive se tu dong tai (~775MB). "
+                "RTF la uoc tinh tren T4 voi chunk 30s._"
+            )
             btn = gr.Button("▶ Tach & giu SFX", variant="primary")
         with gr.Column():
             vout = gr.File(label="📥 MP4 (audio = SFX) — chi co neu input la video")
             aout = gr.File(label="📥 sfx.wav")
             log  = gr.Textbox(label="Log / Trang thai (cap nhat moi 2 giay)", lines=14)
     refresh_btn.click(fn=lambda: gr.update(choices=list_input_files()), outputs=drive_dd)
-    btn.click(fn=process, inputs=[drive_dd, vin], outputs=[vout, aout, log])
+    btn.click(fn=process, inputs=[drive_dd, vin, model_radio], outputs=[vout, aout, log])
 
 if __name__ == "__main__":
     share   = os.environ.get("KEEPSFX_SHARE", "1") != "0"
