@@ -32,7 +32,7 @@ INPUT_DIR    = os.environ.get("KEEPSFX_INPUT",    "/content/drive/MyDrive/keepsf
 PROGRESS_DIR = os.environ.get("KEEPSFX_PROGRESS", "/content/drive/MyDrive/keepsfx_progress")
 
 FS         = 44100
-CHUNK_SEC  = int(os.environ.get("KEEPSFX_CHUNK_SEC", "120"))
+CHUNK_SEC  = int(os.environ.get("KEEPSFX_CHUNK_SEC", "60"))  # 60s: an toan voi T4; tang 90 neu GPU > 20GB
 VIDEO_EXTS = (".mp4", ".mkv", ".mov", ".avi", ".webm", ".m4v", ".ts")
 AUDIO_EXTS = (".wav", ".mp3", ".flac", ".m4a", ".aac", ".ogg", ".opus")
 
