@@ -132,7 +132,7 @@ def _backup_new_effects(sep_dir, progress_dir, already_backed, log_fn=None):
 
 # ====== BANDIT INFERENCE ======
 
-def run_bandit_multi(file_glob, out_dir, progress=None, total=0, backup_dir=None, log_fn=None):
+def run_bandit_multi(file_glob, out_dir, total=0, backup_dir=None, log_fn=None):
     def _log(msg):
         print(msg, flush=True)
         if log_fn:
@@ -179,24 +179,41 @@ def run_bandit_multi(file_glob, out_dir, progress=None, total=0, backup_dir=None
     drain_thread = threading.Thread(target=_drain, args=(proc.stdout,), daemon=True)
     drain_thread.start()
 
-    backed_up = set()
-    t0 = time.time()
+    def _fmt(sec):
+        sec = int(sec)
+        if sec >= 3600:
+            return f"{sec//3600}h{(sec%3600)//60}p{sec%60:02d}s"
+        return f"{sec//60}p{sec%60:02d}s"
+
+    backed_up      = set()
+    t0             = time.time()
+    prev_done      = 0
+    t_chunk1_done  = None   # thoi diem chunk DAU TIEN xong (sau khi model load)
+
     while proc.poll() is None:
         done = _done_count()
         if backup_dir:
             backed_up = _backup_new_effects(out_dir, backup_dir, backed_up, log_fn)
-        if total:
-            el          = time.time() - t0
-            audio_done  = done * CHUNK_SEC
-            audio_total = total * CHUNK_SEC
-            rtf   = el / audio_done if audio_done > 0 else 0
-            eta   = (audio_total - audio_done) * rtf if rtf > 0 else 0
-            rtf_s = f"RTF {rtf:.2f}x" if rtf > 0 else "dang khoi dong model..."
-            eta_s = f"{int(eta//60)}p{int(eta%60):02d}s" if rtf > 0 else "?"
-            status = f"[BandIt] {done}/{total} doan | {rtf_s} | ETA ~{eta_s}"
-            _log(status)
-            if progress:
-                progress(min(0.78, 0.1 + 0.68 * done / total), desc=status)
+
+        el = time.time() - t0
+        if done == 0:
+            # Model dang load — log moi 10 giay de khong spam
+            if int(el) % 10 < 2:
+                _log(f"[BandIt] Load model... {_fmt(el)}")
+        elif done > prev_done:
+            # Co chunk moi vua xong
+            if t_chunk1_done is None:
+                t_chunk1_done = time.time()
+            if done >= 2 and t_chunk1_done:
+                # RTF do tu chunk thu 2 tro di (loai tru thoi gian load model)
+                el_since = time.time() - t_chunk1_done
+                time_per_chunk = el_since / (done - 1)
+                rtf = time_per_chunk / CHUNK_SEC
+                eta = (total - done) * time_per_chunk
+                _log(f"[BandIt] {done}/{total} doan xong | RTF {rtf:.2f}x | ETA ~{_fmt(eta)}")
+            else:
+                _log(f"[BandIt] {done}/{total} doan xong | dang do RTF...")
+            prev_done = done
         time.sleep(2)
 
     drain_thread.join()
@@ -226,7 +243,7 @@ def find_effects_list(out_dir):
 
 # ====== XU LY CHINH ======
 
-def _process_impl(drive_file, upload_path, progress, log_fn):
+def _process_impl(drive_file, upload_path, log_fn):
     def _log(msg):
         print(msg, flush=True)
         log_fn(msg)
@@ -249,7 +266,6 @@ def _process_impl(drive_file, upload_path, progress, log_fn):
     _success = False
 
     try:
-        progress(0.05, desc="Trich + chia audio...")
         _log(f"[*] Trich audio tung {CHUNK_SEC}s chunk tu: {os.path.basename(raw_path)}")
         chunks_dir = os.path.join(work, "chunks")
         all_chunks = split_to_chunks(raw_path, chunks_dir)
@@ -268,11 +284,10 @@ def _process_impl(drive_file, upload_path, progress, log_fn):
             for i in todo_idx:
                 shutil.copy2(all_chunks[i], os.path.join(todo_dir, os.path.basename(all_chunks[i])))
 
-            progress(0.1, desc=f"BandIt xu ly {len(todo_idx)} doan...")
             sep_dir = os.path.join(work, "sep")
             run_bandit_multi(
                 os.path.join(todo_dir, "chunk_*.wav"), sep_dir,
-                progress, len(todo_idx),
+                len(todo_idx),
                 backup_dir=progress_dir,
                 log_fn=log_fn,
             )
@@ -285,9 +300,7 @@ def _process_impl(drive_file, upload_path, progress, log_fn):
                 )
         else:
             _log("[resume] Tat ca chunk da xu ly. Bo qua BandIt.")
-            progress(0.78, desc="Tat ca doan da co tren Drive...")
 
-        progress(0.8, desc="Don disk...")
         if todo_idx:
             for w in glob.glob(os.path.join(work, "sep", "**", "*.wav"), recursive=True):
                 if os.path.splitext(os.path.basename(w))[0].lower() not in ("effects", "effect", "sfx"):
@@ -298,7 +311,7 @@ def _process_impl(drive_file, upload_path, progress, log_fn):
             shutil.rmtree(os.path.join(work, "todo"), ignore_errors=True)
         shutil.rmtree(chunks_dir, ignore_errors=True)
 
-        progress(0.82, desc="Khoi phuc SFX tu Drive + ghep...")
+        _log("[*] Khoi phuc SFX tu Drive + ghep...")
         all_effect_pairs = []
 
         if progress_dir and cached_idx:
@@ -321,7 +334,7 @@ def _process_impl(drive_file, upload_path, progress, log_fn):
         all_effect_pairs.sort(key=lambda x: x[0])
         sfx_parts = [p for _, p in all_effect_pairs]
 
-        progress(0.87, desc="Ghep SFX + xuat file...")
+        _log("[*] Ghep SFX + xuat file...")
         sfx_full = os.path.join(work, "sfx_full.wav")
         if len(sfx_parts) == 1:
             sfx_full = sfx_parts[0]
@@ -335,7 +348,6 @@ def _process_impl(drive_file, upload_path, progress, log_fn):
 
         if is_audio:
             _success = True
-            progress(1.0, desc="Xong!")
             _log(f"✅ Xong! SFX: {out_sfx}")
             return None, out_sfx
 
@@ -347,7 +359,6 @@ def _process_impl(drive_file, upload_path, progress, log_fn):
             out_mp4,
         ])
         _success = True
-        progress(1.0, desc="Xong!")
         _log(f"✅ Xong!\nMP4: {out_mp4}\nSFX: {out_sfx}")
         return out_mp4, out_sfx
 
@@ -359,10 +370,10 @@ def _process_impl(drive_file, upload_path, progress, log_fn):
             print(f"[cleanup] Xoa progress dir: {progress_dir}", flush=True)
 
 
-def process(drive_file, upload_path, progress=gr.Progress()):
+def process(drive_file, upload_path):
     """Generator: cap nhat log textbox moi 2 giay trong khi BandIt chay."""
     log_lines  = []
-    final      = [None]   # (mp4, wav) hoac None neu loi
+    final      = [None]
     error_msg  = [None]
     done_event = threading.Event()
 
@@ -372,7 +383,7 @@ def process(drive_file, upload_path, progress=gr.Progress()):
     def _bg():
         import traceback as _tb
         try:
-            final[0] = _process_impl(drive_file, upload_path, progress, _log)
+            final[0] = _process_impl(drive_file, upload_path, _log)
         except Exception as exc:
             tb = _tb.format_exc()
             print(tb)
