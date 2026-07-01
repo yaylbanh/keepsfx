@@ -447,40 +447,21 @@ def _process_impl(drive_file, upload_path, log_fn, model_stem=None):
 
 
 def process(drive_file, upload_path, model_stem=None):
-    """Generator: cap nhat log textbox moi 2 giay trong khi BandIt chay."""
-    log_lines  = []
-    final      = [None]
-    error_msg  = [None]
-    done_event = threading.Event()
+    log_lines = []
 
     def _log(msg):
         log_lines.append(msg)
 
-    def _bg():
+    try:
+        result = _process_impl(drive_file, upload_path, _log, model_stem)
+        mp4, wav = result or (None, None)
+        return mp4, wav, "\n".join(log_lines)
+    except Exception as exc:
         import traceback as _tb
-        try:
-            final[0] = _process_impl(drive_file, upload_path, _log, model_stem)
-        except Exception as exc:
-            tb = _tb.format_exc()
-            print(tb)
-            error_msg[0] = f"❌ LOI:\n{exc}\n\n--- chi tiet ---\n{tb[-3000:]}"
-            log_lines.append(error_msg[0])
-        finally:
-            done_event.set()
-
-    threading.Thread(target=_bg, daemon=True).start()
-
-    # Cap nhat log moi 2 giay cho den khi xong
-    while not done_event.wait(timeout=2):
-        yield None, None, "\n".join(log_lines[-100:])
-
-    # Ket qua cuoi
-    log_text = "\n".join(log_lines)
-    if error_msg[0]:
-        yield None, None, log_text
-    else:
-        mp4, wav = final[0] or (None, None)
-        yield mp4, wav, log_text
+        tb = _tb.format_exc()
+        print(tb)
+        error_msg = f"❌ LOI:\n{exc}\n\n--- chi tiet ---\n{tb[-3000:]}"
+        return None, None, "\n".join(log_lines) + "\n" + error_msg
 
 
 # ====== GRADIO UI ======
@@ -527,4 +508,4 @@ with gr.Blocks(title="keepsfx - Giu lai SFX") as demo:
 if __name__ == "__main__":
     share   = os.environ.get("KEEPSFX_SHARE", "1") != "0"
     allowed = [p for p in [os.environ.get("KEEPSFX_OUTPUT", ""), "/content/drive/MyDrive"] if p]
-    demo.queue().launch(share=share, inbrowser=not share, debug=True, allowed_paths=allowed)
+    demo.launch(share=share, inbrowser=not share, debug=True, allowed_paths=allowed)
